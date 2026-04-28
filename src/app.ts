@@ -5,6 +5,8 @@ import rateLimit from "express-rate-limit";
 import { apiKeyMiddleware } from "./middleware/api-key.middleware";
 import { errorMiddleware } from "./middleware/error.middleware";
 import emailRoutes from "./routes/email.routes";
+import swaggerUi from "swagger-ui-express";
+import { swaggerSpec } from "./config/swagger";
 
 const app = express();
 
@@ -31,7 +33,8 @@ app.use("/api/v1", limiter);
 app.use("/api/v1", apiKeyMiddleware);
 
 app.use("/api/v1/email", emailRoutes);
-
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use(errorMiddleware);
+
 
 export default app;
