@@ -1,8 +1,40 @@
 import dns from "dns/promises";
+import NodeCache from "node-cache";
 
 type EmailRequest = {
   email: string;
 };
+
+type BatchEmailRequest = {
+  emails: string[];
+};
+
+type EmailValidationResult = {
+  original: string;
+  normalized: string;
+  valid: boolean;
+  score: number;
+  checks: {
+    hasValidFormat: boolean;
+    hasDomain: boolean;
+    isKnownInvalidDomain: boolean;
+    hasMxRecords: boolean;
+    isDisposable: boolean;
+    isRoleBased: boolean;
+    isFreeProvider: boolean;
+  };
+  domain: string | null;
+  localPart: string | null;
+  provider: string | null;
+  cached: boolean;
+};
+
+const cacheTtlSeconds = Number(process.env.CACHE_TTL_SECONDS || 86400);
+
+const emailCache = new NodeCache({
+  stdTTL: cacheTtlSeconds,
+  checkperiod: 120,
+});
 
 const basicEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -36,6 +68,38 @@ const roleBasedLocalParts = [
   "no-reply",
 ];
 
+const freeEmailProviders = [
+  "gmail.com",
+  "yahoo.com",
+  "outlook.com",
+  "hotmail.com",
+  "icloud.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+];
+
+function buildCacheKey(email: string): string {
+  return `email:${email}`;
+}
+
+function getProvider(domain: string | null): string | null {
+  if (!domain) return null;
+
+  const providerMap: Record<string, string> = {
+    "gmail.com": "gmail",
+    "yahoo.com": "yahoo",
+    "outlook.com": "outlook",
+    "hotmail.com": "hotmail",
+    "icloud.com": "icloud",
+    "aol.com": "aol",
+    "proton.me": "proton",
+    "protonmail.com": "proton",
+  };
+
+  return providerMap[domain] || null;
+}
+
 function calculateScore(checks: {
   hasValidFormat: boolean;
   hasDomain: boolean;
@@ -43,7 +107,7 @@ function calculateScore(checks: {
   hasMxRecords: boolean;
   isDisposable: boolean;
   isRoleBased: boolean;
-}) {
+}): number {
   let score = 100;
 
   if (!checks.hasValidFormat) score -= 50;
@@ -56,7 +120,7 @@ function calculateScore(checks: {
   return Math.max(score, 0);
 }
 
-async function checkMxRecords(domain: string | null) {
+async function checkMxRecords(domain: string | null): Promise<boolean> {
   if (!domain) return false;
 
   try {
@@ -88,8 +152,20 @@ export function normalizeEmail(data: EmailRequest) {
   };
 }
 
-export async function validateEmail(data: EmailRequest) {
+export async function validateEmail(
+  data: EmailRequest
+): Promise<EmailValidationResult> {
   const normalizedData = normalizeEmail(data);
+
+  const cacheKey = buildCacheKey(normalizedData.normalized);
+  const cachedResult = emailCache.get<EmailValidationResult>(cacheKey);
+
+  if (cachedResult) {
+    return {
+      ...cachedResult,
+      cached: true,
+    };
+  }
 
   const email = normalizedData.normalized;
   const domain = normalizedData.domain;
@@ -102,18 +178,17 @@ export async function validateEmail(data: EmailRequest) {
     ? invalidDomainPatterns.includes(domain)
     : false;
 
-  const isDisposable = domain
-    ? disposableDomains.includes(domain)
-    : false;
+  const isDisposable = domain ? disposableDomains.includes(domain) : false;
 
   const isRoleBased = localPart
     ? roleBasedLocalParts.includes(localPart)
     : false;
 
   const hasMxRecords =
-    hasValidFormat && hasDomain
-      ? await checkMxRecords(domain)
-      : false;
+    hasValidFormat && hasDomain ? await checkMxRecords(domain) : false;
+
+  const isFreeProvider = domain ? freeEmailProviders.includes(domain) : false;
+  const provider = getProvider(domain);
 
   const checks = {
     hasValidFormat,
@@ -122,9 +197,17 @@ export async function validateEmail(data: EmailRequest) {
     hasMxRecords,
     isDisposable,
     isRoleBased,
+    isFreeProvider,
   };
 
-  const score = calculateScore(checks);
+  const score = calculateScore({
+    hasValidFormat,
+    hasDomain,
+    isKnownInvalidDomain,
+    hasMxRecords,
+    isDisposable,
+    isRoleBased,
+  });
 
   const valid =
     hasValidFormat &&
@@ -133,7 +216,7 @@ export async function validateEmail(data: EmailRequest) {
     hasMxRecords &&
     !isDisposable;
 
-  return {
+  const result: EmailValidationResult = {
     original: normalizedData.original,
     normalized: normalizedData.normalized,
     valid,
@@ -141,5 +224,48 @@ export async function validateEmail(data: EmailRequest) {
     checks,
     domain,
     localPart,
+    provider,
+    cached: false,
+  };
+
+  emailCache.set(cacheKey, result);
+
+  return result;
+}
+
+export async function validateEmailBatch(data: BatchEmailRequest) {
+  if (!Array.isArray(data.emails)) {
+    throw new Error("Emails must be an array");
+  }
+
+  if (data.emails.length === 0) {
+    throw new Error("At least one email is required");
+  }
+
+  if (data.emails.length > 50) {
+    throw new Error("Maximum 50 emails allowed per request");
+  }
+
+  const uniqueEmails = Array.from(
+    new Set(
+      data.emails
+        .filter((email) => typeof email === "string")
+        .map((email) => email.trim())
+        .filter(Boolean)
+    )
+  );
+
+  const results = await Promise.all(
+    uniqueEmails.map((email) => validateEmail({ email }))
+  );
+
+  return {
+    results,
+    meta: {
+      total: results.length,
+      valid: results.filter((item) => item.valid).length,
+      invalid: results.filter((item) => !item.valid).length,
+      cached: results.filter((item) => item.cached).length,
+    },
   };
 }

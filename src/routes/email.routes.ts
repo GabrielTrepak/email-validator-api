@@ -1,5 +1,9 @@
 import { Router } from "express";
-import { validateEmail, normalizeEmail } from "../services/email.service";
+import {
+  validateEmail,
+  normalizeEmail,
+  validateEmailBatch,
+} from "../services/email.service";
 
 /**
  * @swagger
@@ -53,6 +57,20 @@ router.post("/validate", async (req, res, next) => {
     res.json({
       success: true,
       data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/validate/batch", async (req, res, next) => {
+  try {
+    const result = await validateEmailBatch(req.body);
+
+    res.json({
+      success: true,
+      data: result.results,
+      meta: result.meta,
     });
   } catch (error) {
     next(error);
