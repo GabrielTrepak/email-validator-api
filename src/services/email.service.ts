@@ -14,6 +14,7 @@ type EmailValidationResult = {
   normalized: string;
   valid: boolean;
   score: number;
+  reasons: string[];
   checks: {
     hasValidFormat: boolean;
     hasDomain: boolean;
@@ -120,6 +121,26 @@ function calculateScore(checks: {
   return Math.max(score, 0);
 }
 
+function getReasons(checks: {
+  hasValidFormat: boolean;
+  hasDomain: boolean;
+  isKnownInvalidDomain: boolean;
+  hasMxRecords: boolean;
+  isDisposable: boolean;
+  isRoleBased: boolean;
+}): string[] {
+  const reasons: string[] = [];
+
+  if (!checks.hasValidFormat) reasons.push("invalid_format");
+  if (!checks.hasDomain) reasons.push("missing_domain");
+  if (checks.isKnownInvalidDomain) reasons.push("known_invalid_domain");
+  if (!checks.hasMxRecords) reasons.push("no_mx_records");
+  if (checks.isDisposable) reasons.push("disposable_email");
+  if (checks.isRoleBased) reasons.push("role_based_email");
+
+  return reasons;
+}
+
 async function checkMxRecords(domain: string | null): Promise<boolean> {
   if (!domain) return false;
 
@@ -209,6 +230,15 @@ export async function validateEmail(
     isRoleBased,
   });
 
+  const reasons = getReasons({
+  hasValidFormat,
+  hasDomain,
+  isKnownInvalidDomain,
+  hasMxRecords,
+  isDisposable,
+  isRoleBased,
+});
+
   const valid =
     hasValidFormat &&
     hasDomain &&
@@ -221,6 +251,7 @@ export async function validateEmail(
     normalized: normalizedData.normalized,
     valid,
     score,
+    reasons,
     checks,
     domain,
     localPart,

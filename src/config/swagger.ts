@@ -1,17 +1,19 @@
 import swaggerJsdoc from "swagger-jsdoc";
 
+const serverUrl = process.env.SERVER_URL || "http://localhost:3000";
+
 const options: swaggerJsdoc.Options = {
   definition: {
     openapi: "3.0.0",
     info: {
-      title: "Email Validator API",
+      title: "Email Verification API",
       version: "1.0.0",
       description:
-        "Validate and normalize email addresses. Check format, domain and basic validity.",
+        "Validate and verify emails with MX checks, disposable detection, role analysis and scoring.",
     },
     servers: [
       {
-        url: "https://email-validator-api-hscc.onrender.com",
+        url: serverUrl,
       },
     ],
   },
